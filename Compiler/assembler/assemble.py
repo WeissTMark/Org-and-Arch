@@ -1,7 +1,5 @@
 import sys
-
-from assembler.scratch import scratch
-from assembler.try4 import Code
+from try4 import Code
 from structure import File
 
 
