@@ -326,9 +326,7 @@ class Code:
                     self.symbols[content["label"]] = pc
                 else:
                     self.vars.append({content["label"]: content["op"]})
-                    self.labels.append({content["label"]: pc})
                     self.symbols[content["label"]] = content["op"]
-                    self.labelList.append(content["label"])
                     self.varList.append(content["label"])
             if not isPseudoInstr(content["instr"]):
                 # Should inc PC
@@ -359,26 +357,35 @@ class Code:
             "bitLen": bytLen}
 
     def getHex(self):
+        style = '{hex:>4}: {instr:<2} {op:<5} {num:>3}  '
+        styleNoCode = '               {num:>3}  '
+        count = 0
         for line in self.lines:
+            count += 1
             if line[0] == "*":
-                print("{h:<8}{c:<11}".format(h="", c="") + line.strip("\n"))
+                print(styleNoCode.format(num=count) + line.strip("\n"))
                 continue
             content = self.breakUp(line)
             if content["instr"] == "CHK":
                 chk = self.getCheckSum()
-                print("{h:<8}{c:<11}".format(h=hex(self.pc), c=chk) + line.strip("\n"))
+                print(style.format(hex=hex(self.pc)[2:].upper(), instr=chk, op="", num=count) + line.strip("\n"))
+                # print("{h:<8}{c:<11}{l:>3}  ".format(h=hex(self.pc), c=chk, l=count) + line.strip("\n"))
                 continue
             if isPseudoInstr(content["instr"]):
-                print("{h:<8}{c:<11}".format(h="", c="") + line.strip("\n"))
+                print(styleNoCode.format(num=count) + line.strip("\n"))
+                # print("{h:<8}{c:<11}{l:>3}  ".format(h="", c="", l=count) + line.strip("\n"))
                 continue
             instrHex = self.getInstrHex(content["instr"], content["op"])
             opHex = ""
 
             if instrHex[1] == "Bad Address":
-                print("{h:<8}{c:<11}".format(h="", c="") + line.strip("\n"))
+                print("Bad address mode in line: " + str(count))
+                print(styleNoCode.format(num=count) + line.strip("\n"))
+                # print("{h:<8}{c:<11}{l:>3}  ".format(h="", c="", l=count) + line.strip("\n"))
                 continue
             if instrHex[1] == "Bad Branch":
-                print("Bad branch at line: 9")
+                content["op"] = "$" + hex(self.pcStart + 1)[2:].upper()
+                print("Bad branch at line: " + str(count))
 
             self.allHex.append(instrHex[0])
             if content["op"] != "":
@@ -391,8 +398,8 @@ class Code:
                 else:
                     self.allHex.append(opHex)
             self.incPC(int(len(instrHex[0] + opHex) / 2))
-
-            print("{h:<8}{c:<3}{o:<8}".format(h=hex(self.pc)[2:].upper(), c=instrHex[0], o=opHex) + line.strip("\n"))
+            print(style.format(hex=hex(self.pc)[2:].upper(), instr=instrHex[0], op=opHex, num=count) + line.strip("\n"))
+            # print("{h:<8}{c:<3}{o:<8}{l:>3}  ".format(h=hex(self.pc)[2:].upper(), c=instrHex[0], o=opHex, l=count) + line.strip("\n"))
 
     def getInstrHex(self, instr, mode):
         # options = self.INSTR_LIBRARY.get(instr, False)
@@ -507,10 +514,10 @@ class Code:
                 if isLabeled:
                     # print(self.labels)
                     addr = ""
-                    for l in self.labels:
-                        ret = l.get(item)
-                        if ret:
-                            addr = ret
+
+                    ret = self.symbols.get(item)
+                    if ret:
+                        addr = ret
                     if addr < self.pc:
                         # Branching to prev declared
                         diff = self.pc - addr + 2

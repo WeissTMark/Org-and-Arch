@@ -1,10 +1,12 @@
 import sys
-from try4 import Code
+from try5 import Code
 from structure import File
 
 
 def main():
-    fileName = sys.argv[1]
+
+    num = input("What file do you want to test: ")
+    fileName = '../sample_files/sample_{num}.s'.format(num=num)
     l = []
     with open(fileName, mode="r") as file:
         inc = 0
