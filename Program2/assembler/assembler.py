@@ -1,24 +1,75 @@
 import re
 
 symbols = {}
+runningOp = ""
+objectCode = ""
+errorCount = 0
 
 
 class Code:
     def __init__(self, lineList):
         self.lineList = lineList
         self.compLines = self.getAddresses()
+        print("Assembling")
         self.compileLines()
+        byteCount = len(runningOp.split(" ")) - 1
+        print("--End assembly, " + str(byteCount) + " bytes, Errors: " + str(errorCount))
+        symbolTable = {}
+        for i in symbols.keys():
+            if symbols[i]["val"] == "":
+                symbolTable[i] = "$" + hex(symbols[i]["addr"])[2:].upper()
+            else:
+                symbolTable[i] = symbols[i]["val"]
+
+        alphOrder = sorted(symbolTable.keys(), key=lambda x: x.lower())
+        print("Symbol table - alphabetical order:")
+        alphStr = ""
+        count = 0
+        for i in alphOrder:
+            if count == 4:
+                alphStr += "\n"
+                count = 0
+            alphStr += "{s:4}{name:<9}={var}".format(s=" ", name=i, var=symbolTable[i])
+            count += 1
+        print(alphStr)
+        numOrder = sorted(symbolTable.keys(), key=lambda x: symbolTable[x].lower())
+        print("Symbol table - numerical order:")
+        numStr = ""
+        count = 0
+        for i in numOrder:
+
+            if count == 4:
+                numStr += "\n"
+                count = 0
+            numStr += "{s:4}{name:<9}={var}".format(s=" ", name=i, var=symbolTable[i])
+            count += 1
+        print(numStr)
+
+    def getObjectCode(self):
+        global objectCode
+        return objectCode
 
     def getAddresses(self):
         pc = int("8000", base=16)
         count = 1
         lines = []
         for i in self.lineList:
+            if pc > int("ffff", base=16):
+                print("Memory Full")
+                exit()
+            if len(symbols) > 254:
+                print("Memory Full")
+                exit()
             line = self.Line(i, pc, count)
             if i[0] != "*":
+                if line.instr not in INST_LIST:
+                    print("Bad opcode in line: " + str(count))
+                    exit()
                 if line.label != "":
                     if line.label in symbols.keys():
-                        print("Duplicate Symbol in line: " + str(count))
+                        global errorCount
+                        input("Duplicate Symbol in line: " + str(count))
+                        errorCount += 1
                     elif line.instr == "EQU":
                         symbols[line.label] = {'addr': pc, 'val': line.op}
                     else:
@@ -31,18 +82,24 @@ class Code:
                     pc += line.getHexLen()
             count += 1
             lines.append(line)
-        print(str(symbols))
         return lines
 
     def compileLines(self):
         for i in self.compLines:
             if not i.isComment:
-                i.getInstrCode()
-                i.getOpCode()
+                if not i.errored:
+                    i.compressOpCode()
+                if not i.errored:
+                    i.getInstrCode()
+                if not i.errored:
+                    i.getOpCode()
+                if not i.errored:
+                    i.addRunning()
             print(str(i))
 
     class Line:
         def __init__(self, lineStr, addr, lineNum):
+            self.errored = False
             self.opCode = ""
             self.instrCode = ""
             self.isComment = False
@@ -104,6 +161,10 @@ class Code:
                 formattedStr = "{h:>7}{c:<3} {o:<5}{n:>3}  ".format(h="", c="",
                                                                     o="",
                                                                     n=self.lineNum)
+            elif self.instr in ["EQU", "ORG", "END"] or self.errored:
+                formattedStr = "{h:>7}{c:<3} {o:<5}{n:>3}  ".format(h="", c="",
+                                                                    o="",
+                                                                    n=self.lineNum)
             else:
                 formattedStr = "{h:>5}: {c:<3} {o:<5}{n:>3}  ".format(h=hex(self.addr)[2:].upper(), c=self.instrCode,
                                                                       o=self.opCode,
@@ -111,80 +172,72 @@ class Code:
             return formattedStr + self.lineStr.strip("\n")
 
         def getInstrCode(self):
+            global runningOp
             mode = self.getAddressingMode()
+            if self.instr == "CHK":
+                codeList = runningOp.split(" ")
+                xor = int("00", base=16)
+                for i in codeList:
+                    if len(i) == 2:
+                        xor = xor ^ int(i, base=16)
+                self.instrCode = hex(xor)[2:].upper()
             if not isPseudoInstr(self.instr):
-                instrCode = INSTR_LIB[self.instr][mode]
-                self.instrCode = instrCode
+                try:
+                    instrCode = INSTR_LIB[self.instr][mode]
+                    self.instrCode = instrCode
+                except KeyError:
+                    self.flagErr()
+                    input("Bad address mode in line: " + str(self.lineNum))
 
         def getOpCode(self):
-            opList = re.findall(r'[+-/*!.&#$%]|\w+|\W+', self.op)
-            opCode = ""
-            next = ""
-            for item in opList:
-                # Calculate arithmatic here
-                # Get value in hex and get length
-                check = item
-
-                tmp = symbols.get(item)
-                if tmp:
-                    if isBranch(self.instr):
-                        check = str(tmp["addr"])
-                    else:
-                        check = str(tmp["val"])
-                if item == "*":
-                    opCode += self.addr
-                elif next == "hex":
-                    next = ""
-                    opCode += hex(int(check, base=16))[2:]
-                elif next == "bin":
-                    next = ""
-                    opCode += hex(int(check, base=2))[2:]
-                elif check == "$":
-                    next = "hex"
-                elif item == "%":
-                    next = "bin"
-                elif re.match(r'[0-9]+', check):
-                    opCode += hex(int(check))[2:]
-
+            opCode = self.op.split(",")[0]
+            opCode = opCode.replace("#", "")
+            opCode = opCode.replace("(", "")
+            opCode = opCode.replace(")", "")
             if isBranch(self.instr):
                 if int(opCode, base=16) > self.addr:
                     # Branch to later
-                    addr = self.addr - int(opCode, base=16)
-                    addr = hex(int("00", base=16) + addr)
+                    addr = abs(self.addr - int(opCode, base=16)) - 2
+                    opCode = hex(int("00", base=16) + addr)[2:].upper()
                 else:
                     addr = int(opCode, base=16) - self.addr - 1
-                    addr = hex(int("FF", base=16) + addr)
+                    opCode = hex(int("FF", base=16) + addr)[2:].upper()
 
-                opCode = addr[2:].upper()
+            if isPseudoInstr(self.instr):
+                self.opCode = ""
+                return
 
             if self.op != "":
-                opCode = formatHex(opCode)
-            self.opCode = opCode.upper()
+                self.opCode = formatHex(opCode)
+            else:
+                self.opCode = ""
 
         def getAddressingMode(self):
             addrRegex = [
-                ("acc", r'[A]{1}'),
                 ("im", r'#[A-Z|a-z|0-9]{2}'),
                 ("ab", r'[A-Z|a-z|0-9]{4}'),
                 ("abx", r'[A-Z|a-z|0-9]{4}' + r',X'),
                 ("aby", r'[A-Z|a-z|0-9]{4}' + r',Y'),
-                ("zp", r'[\+\-\/\*\!\.\&\#\$\%][A-Z|a-z|0-9]{2}'),
-                ("zpx", r'[\+\-\/\*\!\.\&\#\$\%][A-Z|a-z|0-9]{2}' + r',X'),
-                ("zpy", r'[\+\-\/\*\!\.\&\#\$\%][A-Z|a-z|0-9]{2}' + r',Y'),
+                ("zp", r'[A-Z|a-z|0-9]{2}'),
+                ("zpx", r'[A-Z|a-z|0-9]{2}' + r',X'),
+                ("zpy", r'[A-Z|a-z|0-9]{2}' + r',Y'),
                 ("inx", r'\([A-Z|a-z|0-9]{2},X\)'),
                 ("iny", r'\([A-Z|a-z|0-9]{2}\),Y'),
                 ("in", r'\([A-Z|a-z|0-9]{4}\)'),
                 ("rel", r'/[A-Z|a-z|0-9]{2}/gm')
             ]
+            accList = ["ASL", "LSR", "ROL", "ROR"]
             if self.instr != "":
                 if not isPseudoInstr(self.instr):
                     options = INSTR_LIB[self.instr]
                     # print(str(options) + " " + self.op)
-                    mode = "imp"
+                    mode = "im"
                     if self.op == "":
                         mode = "imp"
+                        if self.instr in accList:
+                            mode = "acc"
                     for type, reg in addrRegex:
-                        result = re.match(reg, self.op)
+                        result = re.fullmatch(reg, self.op)
                         if result:
                             mode = type
                     if "#" in self.op:
@@ -192,8 +245,145 @@ class Code:
                     if len(options) == 1:
                         if "in" not in mode:
                             mode, = options.keys()
+                    if isJump(self.instr):
+                        if mode == "zp":
+                            mode = "ab"
                     return mode
             return "imp"
+
+        def compressOpCode(self):
+            trimmedOp = self.op.split(",")
+            opList = re.findall(r'[+-/*!.&#$%]|\w+|\W+', trimmedOp[0])
+            next = ""
+            evalStr = ""
+            for i in opList:
+                if i == "$":
+                    next = "hex"
+                    continue
+                if i == "%":
+                    next = "bin"
+                    continue
+                if i == "*":
+                    evalStr += self.addr
+
+                if next == "hex":
+                    evalStr += str(int(i, base=16))
+                    next = ""
+                    continue
+                if next == "bin":
+                    evalStr += str(int(i, base=2))
+                    next = ""
+                    continue
+
+                if i in symbols.keys():
+                    # Turn it into the evaluation
+                    if isBranch(self.instr):
+                        if symbols[i]["val"] != "":
+                            self.flagErr()
+                            input("Bad branch in line: " + str(self.lineNum))
+                        evalStr += str(symbols[i]["addr"])
+                    elif isJump(self.instr):
+                        content = symbols[i]
+                        if content["val"] == "":
+                            evalStr += str(content["addr"])
+                        else:
+                            content = symbols[i]["val"]
+                            if content[0] == "$":
+                                evalStr += str(int(content[1:], base=16))
+                            if content[0] == "%":
+                                evalStr += str(int(content[1:], base=2))
+                    else:
+                        content = symbols[i]["val"]
+                        if content[0] == "$":
+                            evalStr += str(int(content[1:], base=16))
+                        if content[0] == "%":
+                            evalStr += str(int(content[1:], base=2))
+
+                else:
+                    if isBranch(self.instr):
+                        self.flagErr()
+                        input("Bad branch in line: " + str(self.lineNum))
+                    evalStr += i
+            opList = re.findall(r'[+-/*!.&#$%]|\w+|\W+', evalStr)
+            result = 0
+            prev = None
+            imm = False
+            ind = False
+            nextOp = ""
+            for i in opList:
+                if i == "#":
+                    imm = True
+                    continue
+                if i == "(" or i == ")":
+                    ind = True
+                    continue
+                elif i in "+-/*!.&":
+                    nextOp = i
+                    continue
+
+                if nextOp == "+":
+                    result = prev + int(i)
+                    prev = prev + int(i)
+                elif nextOp == "-":
+                    result = prev - int(i)
+                    prev = prev - int(i)
+                elif nextOp == "/":
+                    result = int(prev / int(i))
+                    prev = int(prev / int(i))
+                elif nextOp == "*":
+                    result = prev * int(i)
+                    prev = prev * int(i)
+                elif nextOp == "!":
+                    result = prev ^ int(i)
+                    prev = prev ^ int(i)
+                elif nextOp == ".":
+                    result = prev | int(i)
+                    prev = prev | int(i)
+                elif nextOp == "&":
+                    result = prev & int(i)
+                    prev = prev & int(i)
+                else:
+                    if result == 0:
+                        result = int(i)
+                        prev = int(i)
+                    else:
+                        prev = int(i)
+            ret = hex(result)[2:].upper()
+            if len(ret) < 2:
+                ret = ret.rjust(2, "0")
+            if 2 < len(ret) < 4:
+                ret = ret.rjust(4, "0")
+            if imm:
+                ret = "#" + ret
+            if ind:
+                ret = "(" + ret
+            self.op = ret
+            if len(trimmedOp) > 1:
+                if trimmedOp[1] == "Y":
+                    self.op = ret + ")," + trimmedOp[1]
+                else:
+                    self.op = ret + "," + trimmedOp[1]
+            elif self.op[0] == "(":
+                self.op += ")"
+
+            if len(opList) == 0:
+                self.op = ""
+
+        def addRunning(self):
+            global runningOp
+            global objectCode
+            if self.instrCode != "":
+                runningOp += self.instrCode + " "
+            if self.opCode != "":
+                runningOp += self.opCode + " "
+            if self.instrCode != "":
+                objectCode += "{h:>5}: {c:<3} {o:<5}\n".format(h=hex(self.addr)[2:].upper(), c=self.instrCode,
+                                                               o=self.opCode)
+
+        def flagErr(self):
+            global errorCount
+            errorCount += 1
+            self.errored = True
 
 
 def isJump(instr):
@@ -498,3 +688,8 @@ INSTR_LIB = {
         "imp": "98"
     },
 }
+
+INST_LIST = ['ADC', 'AND', 'ASL', 'BCC', 'BCS', 'BEQ', 'BIT', 'BMI', 'BNE', 'BPL', 'BRK', 'BVC', 'BVS', 'CLC', 'CLD',
+             'CLI', 'CLV', 'CMP', 'CPX', 'CPY', 'DEC', 'DEX', 'DEY', 'EOR', 'INC', 'INX', 'INY', 'JMP', 'JSR', 'LDA',
+             'LDX', 'LDY', 'LSR', 'NOP', 'ORA', 'PHA', 'PHP', 'PLA', 'PLP', 'ROL', 'ROR', 'RTI', 'RTS', 'SBC', 'SEC',
+             'SED', 'SEI', 'STA', 'STX', 'STY', 'TAX', 'TAY', 'TSX', 'TXA', 'TXS', 'TYA', 'CHK', 'END', 'EQU', 'ORG']
